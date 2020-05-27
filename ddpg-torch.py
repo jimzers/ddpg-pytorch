@@ -58,3 +58,65 @@ class ReplayBuffer(object):
 
         return states, actions, rewards, new_states, terminal
 
+class CriticNetwork(nn.Module):
+    def __init__(self, beta, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir='tmp/ddpg'):
+        super(CriticNetwork).__init__()
+
+        self.beta = beta
+        self.n_actions = n_actions
+        self.filename = os.path.join(chkpt_dir, name)
+
+        self.input_dims = input_dims
+        self.fc1_dims = fc1_dims
+        self.fc2_dims = fc2_dims
+
+        self.fc1 = nn.Linear(*self.input_dims, self.fc1_dims)
+        f1 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
+        # init the values of the weights of first lin connected layer
+        torch.nn.init.uniform_(self.fc1.weight.data, -f1, f1)
+        torch.nn.init.uniform_(self.fc1.bias.data, -f1, f1)
+        # normalization layer
+        self.norm1 = nn.LayerNorm(self.fc1_dims)
+
+        self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
+        # init the values of the weights
+        f2 = 1 / np.sqrt(self.fc2.weight.data.size()[0])
+        torch.nn.init.uniform_(self.fc2.weight.data.size, -f2, f2)
+        torch.nn.init.uniform_(self.fc2.bias.data, -f2, f2)
+        # normalization layer
+        self.norm2 = nn.LayerNorm(self.fc2_dims)
+
+        self.action_val = nn.Linear(self.n_actions, fc2_dims)
+        f3 = 0.003 # idk why this is constant LOL
+        self.q = nn.Linear(self.fc2_dims, 1)
+        # do the weight initialization
+        torch.nn.init.uniform_(self.q.weight.data, -f3, f3)
+        torch.nn.init.uniform_(self.q.bias.data, -f3, f3)
+
+        self.optimizer = optim.Adam(self.parameters(), lr=beta)
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') # LOL good luck training in CPU HAHAHHAhA
+
+        self.to(self.device) # send off to GPU. or cpu if u wanna finish by 22nd century
+
+    def forward(self, state, action):
+        x = self.fc1(state)
+        x = self.norm1(x)
+        x = F.relu(x) # relu everything AFTER batch norming... so you don't chop off the negative batch norms
+
+        x = self.fc2(x)
+        x = self.norm2(x)
+
+        action_val = self.action_val(action) # option to relu first before feeding in...
+        state_action_val = F.relu(torch.add(state_val, action_val))
+        state_action_val = self.q(state_action_val)
+
+        return state_action_val
+
+    def save_checkpoint(self):
+        print('------ save chkpt -----------')
+        torch.save(self.state_dict(), self.checkpoint_file)
+
+    def load_checkpoint(self):
+        print('------------ loading chkpt ----------------')
+        self.load_state_dict(torch.load(self.checkpoint_file))
+
