@@ -106,17 +106,77 @@ class CriticNetwork(nn.Module):
         x = self.fc2(x)
         x = self.norm2(x)
 
+        # x => state val
+
         action_val = self.action_val(action) # option to relu first before feeding in...
-        state_action_val = F.relu(torch.add(state_val, action_val))
+        state_action_val = F.relu(torch.add(x, action_val))
         state_action_val = self.q(state_action_val)
 
         return state_action_val
 
     def save_checkpoint(self):
         print('------ save chkpt -----------')
-        torch.save(self.state_dict(), self.checkpoint_file)
+        torch.save(self.state_dict(), self.filename)
 
     def load_checkpoint(self):
         print('------------ loading chkpt ----------------')
-        self.load_state_dict(torch.load(self.checkpoint_file))
+        self.load_state_dict(torch.load(self.filename))
+
+class ActorNetwork(nn.Module):
+    def __init__(self, alpha, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir='tmp/ddpg'):
+        super(ActorNetwork).__init__()
+        self.input_dims = input_dims
+        self.n_actions = n_actions
+        self.fc1_dims = fc1_dims
+        self.fc2_dims = fc2_dims
+        self.filename = os.path.join(chkpt_dir, name+'_ddpg')
+
+        self.fc1 = nn.Linear(*self.input_dims, self.fc1_dims)
+        f1 = 1 / np.sqrt(self.fc1.weight.data.size()[0])
+        torch.nn.init.uniform_(self.fc1.weight.data, -f1, f1)
+        torch.nn.init.uniform_(self.fc1.bias.data, -f1, f1)
+
+        self.norm1 = nn.LayerNorm(self.fc1_dims)
+
+        self.fc2 = n
+        torch.nn.init.uniform_(self.fc1.weight.data, -f1, f1)
+        torch.nn.init.uniform_(self.fc1.bias.data, -f1, f1)
+
+
+        self.norm1 = nn.LayerNorm(self.fc1_dims)
+
+        self.fc2 = nn.Linear(*self.fc1_dims, self.fc2_dims)
+        f2 = 1 / np.sqrt(self.fc2.weight.data.size()[0])
+        torch.nn.init.uniform_(self.fc2.weight.data, -f2, f2)
+        torch.nn.init.uniform_(self.fc2.bias.data, -f2, f2)
+
+        self.norm2 = nn.LayerNorm(self.fc2_dims)
+
+        f3 = 0.003
+        self.mu = nn.Linear(self.fc2_dims, self.n_actions)
+        torch.nn.init.uniform_(self.mu.weight.data, -f3, f3)
+        torch.nn.init.uniform_(self.mu.bias.data, -f3, f3)
+
+        self.optimzer = optim.Adam(self.parameters(), lr=alpha)
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.to(self.device)
+
+    def forward(self, state):
+        x = self.fc1(state)
+        x = self.norm1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = self.norm2(x)
+        x = F.relu(x)
+        x = torch.tanh(self.mu(x))
+
+        return x
+
+    def save_checkpoint(self):
+        print('----- saving checkpoint -------')
+        torch.save(self.state_dict(), self.filename)
+
+    def load_checkpoint(self):
+        print('-------- loading checkpoint --------')
+        self.load_state_dict(torch.load(self.filename))
 
