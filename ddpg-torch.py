@@ -180,3 +180,104 @@ class ActorNetwork(nn.Module):
         print('-------- loading checkpoint --------')
         self.load_state_dict(torch.load(self.filename))
 
+class Agent(object):
+    def __init__(self, alpha, beta, input_dims, tau, env, gamma=0.99, n_actions=2, max_size=1000000, layer1_size=400, layer2_size=300, batch_size=64):
+        self.gamma = gamma
+        self.tau = tau
+        self.memory = ReplayBuffer(max_size, input_dims, n_actions)
+        self.batch_size = batch_size
+
+        self.actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='Actor')
+        self.target_actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='TargetActor')
+
+        self.critic = CriticNetwork(beta, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='Critic')
+        self.target_critic = CriticNetwork(beta, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='TargetCritic')
+
+        self.noise = OUActionNoise(mu = np.zeros(n_actions))
+
+        self.update_network_parameters(tau=1)
+
+    def choose_action(self, observation):
+        self.actor.eval() # set network to evaluation mode, but not train mode yet
+        observation = torch.tensor(observation, dtype=torch.float).to(self.actor.device) # send the observation to GPU
+        # get action from actor
+        mu = self.actor(observation).to(self.actor.device)
+        mu_prime = mu + torch.tensor(self.noise(), dtype = torch.float).to(self.actor.device)
+        self.actor.train()
+        return mu_prime.cpu().detach.numpy() # LOL get numpy value in cpu mode to give to gym
+
+    def store(self, state, action, reward, state_new, done):
+        self.memory.store_transition(state, action, reward, state_new, done)
+
+    def learn(self):
+        if self.memory.mem_cntr < self.batch_size:
+            return # don't learn if the replay buffer doesn't have enough memories
+
+        state, action, reward, state_new, done = self.memory.sample_buffer(self.batch_size)
+        #send off the stuff to the gpu
+        state = torch.tensor(state, dtype=torch.float).to(self.critic.device)
+        action = torch.tensor(action, dtype=torch.float).to(self.critic.device)
+        reward = torch.tensor(reward, dtype=torch.float).to(self.critic.device)
+        state_new = torch.tensor(state_new, dtype=torch.float).to(self.critic.device)
+        done = torch.tensor(done, dtype=torch.float).to(self.critic.device)
+
+        # set networks to eval mode
+        self.target_actor.eval()
+        self.target_critic.eval()
+        self.critic.eval()
+
+        # get target actions to use on target critic network
+        target_actions = self.target_actor.forward(state_new)
+        critic_val_new = self.target_critic.forward(state_new, target_actions)
+        critic_val = self.critic.forward(state, action)
+
+        target = []
+        # target stores all the y_i stuff
+        for j in range(self.batch_size):
+            # this is y_i
+            target.append(reward[j] + self.gamma * critic_val_new[j] * done[j])
+        target = torch.tensor(target).to(self.critic.device)
+        target = target.view(batch_size, 1) # resize to shape (batch_size, 1)
+
+        self.critic.train() # NOW we set to training mode
+        self.critic.optimizer.zero_grad() # zero the gradients
+        critic_loss = F.mse_loss(target, critic_val)
+        critic_loss.backward() # backprop the critic loss woo hoo
+        critic_loss.optimizer.step()
+
+        self.critic.eval() # freeze the weights again
+
+        self.actor.optimizer.zero_grad()
+        mu = self.actor.forward(state)
+        self.actor.train()
+
+        policy_loss = -self.critic.forward(state, mu).mean() # do mean b/c batch stuff
+
+        policy_loss.backward()
+        self.actor.optimizer.step()
+
+        self.update_network_parameters()
+
+    def update_network_parameters(self, tau=None):
+        if tau is None:
+            tau = self.tau
+
+        for target_param, param in zip(self.target_actor.parameters(), self.actor.parameters()):
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+
+        for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+
+    def save_models(self):
+        self.actor.save_checkpoint()
+        self.critic.save_checkpoint()
+        self.target_actor.save_checkpoint()
+        self.target_critic.save_checkpoint()
+
+    def load_models(self):
+        self.actor.load_checkpoint()
+        self.critic.load_checkpoint()
+        self.target_actor.save_checkpoint()
+        self.target_critic.save_checkpoint()
+
+
