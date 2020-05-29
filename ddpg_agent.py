@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 
-class OUActionoise(object):
+class OUActionNoise(object):
     def __init__(self, mu, sigma=0.15, theta=0.2, dt=1e-2, x0=None):
         self.theta = theta
         self.mu = mu
@@ -40,7 +40,7 @@ class ReplayBuffer(object):
         idx = self.mem_cntr % self.mem_size # wrap around
         self.state_mem[idx] = state
         self.action_mem[idx] = action
-        self.reward_memory[idx] = reward
+        self.reward_mem[idx] = reward
         self.new_state_mem[idx] = new_state
         self.terminal_mem[idx] = 1 - done
 
@@ -54,13 +54,13 @@ class ReplayBuffer(object):
         actions = self.action_mem[batch]
         rewards = self.reward_mem[batch]
         new_states  = self.new_state_mem[batch]
-        done = self.self.terminal_mem[batch]
+        done = self.terminal_mem[batch]
 
-        return states, actions, rewards, new_states, terminal
+        return states, actions, rewards, new_states, done
 
 class CriticNetwork(nn.Module):
     def __init__(self, beta, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir='tmp/ddpg'):
-        super(CriticNetwork).__init__()
+        super().__init__()
 
         self.beta = beta
         self.n_actions = n_actions
@@ -81,7 +81,7 @@ class CriticNetwork(nn.Module):
         self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
         # init the values of the weights
         f2 = 1 / np.sqrt(self.fc2.weight.data.size()[0])
-        torch.nn.init.uniform_(self.fc2.weight.data.size, -f2, f2)
+        torch.nn.init.uniform_(self.fc2.weight.data, -f2, f2)
         torch.nn.init.uniform_(self.fc2.bias.data, -f2, f2)
         # normalization layer
         self.norm2 = nn.LayerNorm(self.fc2_dims)
@@ -124,7 +124,8 @@ class CriticNetwork(nn.Module):
 
 class ActorNetwork(nn.Module):
     def __init__(self, alpha, input_dims, fc1_dims, fc2_dims, n_actions, name, chkpt_dir='tmp/ddpg'):
-        super(ActorNetwork).__init__()
+        super().__init__()
+
         self.input_dims = input_dims
         self.n_actions = n_actions
         self.fc1_dims = fc1_dims
@@ -138,14 +139,7 @@ class ActorNetwork(nn.Module):
 
         self.norm1 = nn.LayerNorm(self.fc1_dims)
 
-        self.fc2 = n
-        torch.nn.init.uniform_(self.fc1.weight.data, -f1, f1)
-        torch.nn.init.uniform_(self.fc1.bias.data, -f1, f1)
-
-
-        self.norm1 = nn.LayerNorm(self.fc1_dims)
-
-        self.fc2 = nn.Linear(*self.fc1_dims, self.fc2_dims)
+        self.fc2 = nn.Linear(self.fc1_dims, self.fc2_dims)
         f2 = 1 / np.sqrt(self.fc2.weight.data.size()[0])
         torch.nn.init.uniform_(self.fc2.weight.data, -f2, f2)
         torch.nn.init.uniform_(self.fc2.bias.data, -f2, f2)
@@ -157,7 +151,7 @@ class ActorNetwork(nn.Module):
         torch.nn.init.uniform_(self.mu.weight.data, -f3, f3)
         torch.nn.init.uniform_(self.mu.bias.data, -f3, f3)
 
-        self.optimzer = optim.Adam(self.parameters(), lr=alpha)
+        self.optimizer = optim.Adam(self.parameters(), lr=alpha)
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.to(self.device)
 
@@ -187,8 +181,8 @@ class Agent(object):
         self.memory = ReplayBuffer(max_size, input_dims, n_actions)
         self.batch_size = batch_size
         # add clipping values for high and low
-        self.low = env.low
-        self.high = env.high
+        self.low = env.action_space.low
+        self.high = env.action_space.high
 
         self.actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='Actor')
         self.target_actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='TargetActor')
@@ -209,6 +203,8 @@ class Agent(object):
         self.actor.train()
         # detach values
         mu_prime = mu_prime.cpu().detach().numpy() # LOL get numpy value in cpu mode to give to gym
+        #print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+        #print(mu_prime.shape)
         return np.clip(mu_prime, self.low, self.high) # clip the action
 
 
@@ -243,13 +239,13 @@ class Agent(object):
             # this is y_i
             target.append(reward[j] + self.gamma * critic_val_new[j] * done[j])
         target = torch.tensor(target).to(self.critic.device)
-        target = target.view(batch_size, 1) # resize to shape (batch_size, 1)
+        target = target.view(self.batch_size, 1) # resize to shape (batch_size, 1)
 
         self.critic.train() # NOW we set to training mode
         self.critic.optimizer.zero_grad() # zero the gradients
         critic_loss = F.mse_loss(target, critic_val)
         critic_loss.backward() # backprop the critic loss woo hoo
-        critic_loss.optimizer.step()
+        self.critic.optimizer.step()
 
         self.critic.eval() # freeze the weights again
 
