@@ -186,6 +186,9 @@ class Agent(object):
         self.tau = tau
         self.memory = ReplayBuffer(max_size, input_dims, n_actions)
         self.batch_size = batch_size
+        # add clipping values for high and low
+        self.low = env.low
+        self.high = env.high
 
         self.actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='Actor')
         self.target_actor = ActorNetwork(alpha, input_dims, layer1_size, layer2_size, n_actions=n_actions, name='TargetActor')
@@ -204,7 +207,10 @@ class Agent(object):
         mu = self.actor(observation).to(self.actor.device)
         mu_prime = mu + torch.tensor(self.noise(), dtype = torch.float).to(self.actor.device)
         self.actor.train()
-        return mu_prime.cpu().detach.numpy() # LOL get numpy value in cpu mode to give to gym
+        # detach values
+        mu_prime = mu_prime.cpu().detach().numpy() # LOL get numpy value in cpu mode to give to gym
+        return np.clip(mu_prime, self.low, self.high) # clip the action
+
 
     def store(self, state, action, reward, state_new, done):
         self.memory.store_transition(state, action, reward, state_new, done)
